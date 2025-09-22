@@ -120,5 +120,5 @@ def index():
     # For GET request, just show the upload page
     return render_template('index.html')
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     app.run(debug=True, port=5000)
