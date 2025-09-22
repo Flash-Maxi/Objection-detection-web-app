@@ -4,7 +4,7 @@ from torchvision.models.detection import retinanet_resnet50_fpn_v2, RetinaNet_Re
 from PIL import Image, ImageDraw, ImageFont
 import os
 import uuid
-from flask import Flask, request, render_template, url_for, send_from_directory
+from flask import Flask, request, render_template
 
 # --- Initialize Flask App ---
 app = Flask(__name__)
@@ -15,40 +15,33 @@ RESULTS_FOLDER = 'static/results'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
 CONFIDENCE_THRESHOLD = 0.5  # 50% probability
 
-# Create directories if they don't exist
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(RESULTS_FOLDER, exist_ok=True)
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['RESULTS_FOLDER'] = RESULTS_FOLDER
 
-# --- Load The Model (Done only once at startup) ---
+# --- Load the Model Once ---
 print("Loading pre-trained RetinaNet model... This might take a moment.")
 weights = RetinaNet_ResNet50_FPN_V2_Weights.DEFAULT
 model = retinanet_resnet50_fpn_v2(weights=weights)
-model.eval()  # Set model to evaluation mode
+model.eval()
 preprocess = weights.transforms()
 class_names = weights.meta["categories"]
 print("Model loaded successfully.")
 
 def allowed_file(filename):
-    """Checks if the uploaded file has an allowed extension."""
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def run_detection(image_path):
-    """
-    Runs the object detection model on a single image and returns the results.
-    """
     img = Image.open(image_path).convert("RGB")
-    img_tensor = preprocess(img)
-    img_tensor = img_tensor.unsqueeze(0)
+    img_tensor = preprocess(img).unsqueeze(0)
 
     with torch.no_grad():
         predictions = model(img_tensor)
 
     prediction = predictions[0]
 
-    # --- Process and Draw Results ---
     draw = ImageDraw.Draw(img)
     try:
         font = ImageFont.truetype("arial.ttf", 20)
@@ -61,14 +54,10 @@ def run_detection(image_path):
             box = [i.item() for i in box]
             class_name = class_names[label.item()]
             probability = score.item() * 100
-
             detected_objects.append(f"{class_name}: {probability:.2f}%")
 
-            # Draw bounding box and label
             draw.rectangle(box, outline="lime", width=3)
             text = f"{class_name} {probability:.1f}%"
-            
-            # Text background
             try:
                 text_bbox = draw.textbbox((box[0], box[1] - 5), text, font=font)
                 text_height = text_bbox[3] - text_bbox[1]
@@ -78,47 +67,38 @@ def run_detection(image_path):
                     fill="lime"
                 )
                 draw.text((box[0] + 2, box[1] - text_height - 6), text, fill="black", font=font)
-            except AttributeError: # Fallback for older Pillow
+            except AttributeError:  # Older Pillow fallback
                 draw.text((box[0] + 2, box[1] - 15), text, fill="black")
 
-
-    # --- Save the output image ---
     unique_filename = f"{uuid.uuid4()}.jpg"
     output_path = os.path.join(app.config['RESULTS_FOLDER'], unique_filename)
     img.save(output_path)
-
     return unique_filename, detected_objects
-
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
         if 'file' not in request.files:
             return render_template('index.html', error="No file part")
-        
         file = request.files['file']
-        
         if file.filename == '':
             return render_template('index.html', error="No selected file")
 
         if file and allowed_file(file.filename):
-            # Save the uploaded file
             filename = f"{uuid.uuid4()}.jpg"
             upload_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
             file.save(upload_path)
-
-            # Run detection
             result_filename, detections = run_detection(upload_path)
-            
-            # Pass results to the template
             return render_template(
-                'index.html', 
+                'index.html',
                 result_image=result_filename,
                 detections=detections
             )
 
-    # For GET request, just show the upload page
     return render_template('index.html')
 
+# --- Production Safe Entrypoint ---
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    port = int(os.environ.get("PORT", 5000))  # Respect hosting platform's port
+    debug_mode = os.environ.get("FLASK_DEBUG", "1") == "1"  # Allow toggling via env var
+    app.run(host="0.0.0.0", port=port, debug=debug_mode)
